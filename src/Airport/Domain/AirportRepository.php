@@ -6,10 +6,12 @@ namespace App\Airport\Domain;
 
 interface AirportRepository
 {
+    public function findById(AirportId $id): ?Airport;
+
     public function findByIataCode(IataCode $iataCode): ?Airport;
 
     /** @return Airport[] */
-    public function findAll(): array;
+    public function findAllActive(): array;
 
     public function save(Airport $airport): void;
 

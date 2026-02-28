@@ -17,13 +17,6 @@ doctrine:
         identity_generation_preferences:
             Doctrine\DBAL\Platforms\PostgreSQLPlatform: identity
         auto_mapping: true
-        mappings:
-            Airport:
-                type: attribute
-                is_bundle: false
-                dir: '%kernel.project_dir%/src/Airport/Domain'
-                prefix: 'App\Airport\Domain'
-                alias: Airport
         controller_resolver:
             auto_mapping: false
 
