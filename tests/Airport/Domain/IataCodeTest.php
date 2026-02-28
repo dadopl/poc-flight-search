@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Tests\Airport\Domain;
 
+use App\Airport\Domain\Exception\InvalidIataCodeException;
 use App\Airport\Domain\IataCode;
-use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 class IataCodeTest extends TestCase
@@ -47,7 +47,7 @@ class IataCodeTest extends TestCase
      */
     public function testRejectsInvalidCode(string $code): void
     {
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(InvalidIataCodeException::class);
 
         new IataCode($code);
     }
