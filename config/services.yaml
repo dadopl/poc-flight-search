@@ -63,3 +63,20 @@ services:
     App\Shared\Infrastructure\Event\SynchronousDomainEventPublisher:
         arguments:
             $listeners: !tagged_iterator App\Shared\Domain\Event\DomainEventListener
+
+    App\Search\Domain\Repository\SearchSessionRepository:
+        alias: App\Search\Infrastructure\Repository\InMemorySearchSessionRepository
+
+    App\Search\Application\Port\SearchResultsCache:
+        alias: App\Search\Infrastructure\Cache\InMemorySearchResultsCache
+
+    App\Pricing\Domain\Repository\PriceListRepository:
+        alias: App\Pricing\Infrastructure\Repository\InMemoryPriceListRepository
+
+    App\Pricing\Domain\Service\PriceCalculator:
+        arguments:
+            $policies:
+                - '@App\Pricing\Domain\Policy\EarlyBirdPricingPolicy'
+                - '@App\Pricing\Domain\Policy\LastMinutePricingPolicy'
+                - '@App\Pricing\Domain\Policy\OccupancyBasedPricingPolicy'
+                - '@App\Pricing\Domain\Policy\PassengerCountPricingPolicy'
