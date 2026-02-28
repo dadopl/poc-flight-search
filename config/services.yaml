@@ -19,8 +19,38 @@ services:
     App\:
         resource: '../src/'
 
+    # Tag CommandHandler and QueryHandler implementations for the correct bus
+    _instanceof:
+        App\Shared\Domain\Bus\Command\CommandHandler:
+            tags:
+                - { name: messenger.message_handler, bus: command.bus }
+        App\Shared\Domain\Bus\Query\QueryHandler:
+            tags:
+                - { name: messenger.message_handler, bus: query.bus }
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
     App\Airport\Domain\AirportRepository:
         alias: App\Airport\Infrastructure\Persistence\DoctrineAirportRepository
+
+    App\Shared\Domain\Bus\Command\CommandBus:
+        alias: App\Shared\Infrastructure\Bus\Command\MessengerCommandBus
+
+    App\Shared\Domain\Bus\Query\QueryBus:
+        alias: App\Shared\Infrastructure\Bus\Query\MessengerQueryBus
+
+    App\Shared\Domain\Event\DomainEventPublisher:
+        alias: App\Shared\Infrastructure\Event\SynchronousDomainEventPublisher
+
+    App\Shared\Infrastructure\Bus\Command\MessengerCommandBus:
+        arguments:
+            $commandBus: '@command.bus'
+
+    App\Shared\Infrastructure\Bus\Query\MessengerQueryBus:
+        arguments:
+            $queryBus: '@query.bus'
+
+    App\Shared\Infrastructure\Event\SynchronousDomainEventPublisher:
+        arguments:
+            $listeners: !tagged_iterator App\Shared\Domain\Event\DomainEventListener
