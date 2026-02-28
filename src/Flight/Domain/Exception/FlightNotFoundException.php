@@ -12,4 +12,9 @@ final class FlightNotFoundException extends DomainException
     {
         return new self(sprintf('Flight with ID "%s" not found.', $id));
     }
+
+    public static function withFlightNumber(string $flightNumber): self
+    {
+        return new self(sprintf('Flight with number "%s" not found.', $flightNumber));
+    }
 }
