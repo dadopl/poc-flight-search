@@ -10,6 +10,7 @@ use App\Flight\Domain\ValueObject\FlightId;
 use App\Flight\Domain\ValueObject\FlightNumber;
 use App\Flight\Domain\ValueObject\FlightStatus;
 use App\Shared\Domain\ValueObject\DateTimeRange;
+use DateTimeImmutable;
 
 interface FlightRepository
 {
@@ -21,6 +22,8 @@ interface FlightRepository
      * @return Flight[]
      */
     public function findByRoute(AirportId $departure, AirportId $arrival, DateTimeRange $range): array;
+
+    public function countByDepartureAirportAndDate(AirportId $airportId, DateTimeImmutable $date): int;
 
     /**
      * @return Flight[]

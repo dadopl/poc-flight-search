@@ -6,6 +6,8 @@ namespace App\Shared\Infrastructure\Http;
 
 use App\Airport\Domain\Exception\AirportNotFoundException;
 use App\Airport\Domain\Exception\InvalidIataCodeException;
+use App\Availability\Domain\Exception\InsufficientSeatsException;
+use App\Availability\Domain\Exception\InvalidAvailabilityException;
 use App\Flight\Domain\Exception\FlightNotFoundException;
 use App\Flight\Domain\Exception\InvalidFlightStatusTransitionException;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
@@ -61,6 +63,24 @@ final class ExceptionListener implements EventSubscriberInterface
         }
 
         if ($exception instanceof \InvalidArgumentException) {
+            $event->setResponse(new JsonResponse([
+                'meta'  => ['status' => 'error'],
+                'error' => $exception->getMessage(),
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY));
+
+            return;
+        }
+
+        if ($exception instanceof InvalidAvailabilityException) {
+            $event->setResponse(new JsonResponse([
+                'meta'  => ['status' => 'error'],
+                'error' => $exception->getMessage(),
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY));
+
+            return;
+        }
+
+        if ($exception instanceof InsufficientSeatsException) {
             $event->setResponse(new JsonResponse([
                 'meta'  => ['status' => 'error'],
                 'error' => $exception->getMessage(),
