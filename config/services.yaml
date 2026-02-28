@@ -34,6 +34,9 @@ services:
     App\Airport\Domain\AirportRepository:
         alias: App\Airport\Infrastructure\Persistence\DoctrineAirportRepository
 
+    App\Flight\Domain\Repository\FlightRepository:
+        alias: App\Flight\Infrastructure\Persistence\DoctrineFlightRepository
+
     App\Shared\Domain\Bus\Command\CommandBus:
         alias: App\Shared\Infrastructure\Bus\Command\MessengerCommandBus
 

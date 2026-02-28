@@ -6,6 +6,8 @@ namespace App\Shared\Infrastructure\Http;
 
 use App\Airport\Domain\Exception\AirportNotFoundException;
 use App\Airport\Domain\Exception\InvalidIataCodeException;
+use App\Flight\Domain\Exception\FlightNotFoundException;
+use App\Flight\Domain\Exception\InvalidFlightStatusTransitionException;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpKernel\Event\ExceptionEvent;
@@ -27,6 +29,24 @@ final class ExceptionListener implements EventSubscriberInterface
                 'meta'  => ['status' => 'error'],
                 'error' => $exception->getMessage(),
             ], JsonResponse::HTTP_NOT_FOUND));
+
+            return;
+        }
+
+        if ($exception instanceof FlightNotFoundException) {
+            $event->setResponse(new JsonResponse([
+                'meta'  => ['status' => 'error'],
+                'error' => $exception->getMessage(),
+            ], JsonResponse::HTTP_NOT_FOUND));
+
+            return;
+        }
+
+        if ($exception instanceof InvalidFlightStatusTransitionException) {
+            $event->setResponse(new JsonResponse([
+                'meta'  => ['status' => 'error'],
+                'error' => $exception->getMessage(),
+            ], JsonResponse::HTTP_CONFLICT));
 
             return;
         }
