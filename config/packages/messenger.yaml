@@ -1,0 +1,23 @@
+framework:
+    messenger:
+        buses:
+            command.bus: ~
+            query.bus: ~
+
+when@dev:
+    framework:
+        messenger:
+            transports:
+                async_commands:
+                    dsn: 'in-memory://'
+                async_queries:
+                    dsn: 'in-memory://'
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                async_commands:
+                    dsn: 'in-memory://'
+                async_queries:
+                    dsn: 'in-memory://'
