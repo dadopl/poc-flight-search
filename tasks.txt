@@ -1,0 +1,362 @@
+# Flight Search API — 20 zadań Jira
+## Format gotowy do wklejenia w POC
+
+---
+
+## TASK-001 — Uruchomienie projektu wyszukiwarki lotów
+
+**Tytuł biznesowy:** Przygotowanie środowiska deweloperskiego systemu wyszukiwania lotów
+
+**Opis biznesowy:**
+Zespół potrzebuje wspólnej, ustandaryzowanej bazy projektu aby wszyscy deweloperzy mogli pracować w identycznym środowisku. Brak spójnej konfiguracji powoduje problemy z odtwarzalnością błędów i spowalnia onboarding nowych osób. Projekt musi od pierwszego dnia wymuszać jakość kodu przez automatyczne narzędzia analizy statycznej i testy.
+
+**Wymagania:**
+Projekt Symfony 7.4 z PHP 8.4 jako twardym wymaganiem. Konfiguracja bazy danych SQLite dla środowiska deweloperskiego i PostgreSQL dla produkcji przez zmienne środowiskowe. PHPStan na poziomie 8 jako blokada CI. CodeSniffer ze standardem PSR-12. PHPUnit skonfigurowany z osobną bazą testową. Makefile z komendami `make test`, `make stan`, `make cs`, `make migrate`. Publiczne repozytorium GitHub z README opisującym uruchomienie.
+
+**Definition of Ready:**
+Nazwa projektu zatwierdzona przez zespół. Dostęp do GitHub organizacji przyznany. Zdecydowano że SQLite na dev, PostgreSQL na prod. Wybrano PHP 8.4 jako minimalną wersję.
+
+**Definition of Done:**
+`bin/console` działa bez błędów. PHPUnit uruchamia pustą suitę i przechodzi. PHPStan level 8 nie zgłasza błędów na pustym projekcie. CodeSniffer nie zgłasza naruszeń. README zawiera instrukcję uruchomienia. CI na GitHub Actions przechodzi.
+
+---
+
+## TASK-002 — Wspólne fundamenty domeny dla wszystkich modułów
+
+**Tytuł biznesowy:** Stworzenie bazowych klas domenowych współdzielonych przez cały system
+
+**Opis biznesowy:**
+System wyszukiwania lotów składa się z kilku niezależnych modułów (lotniska, loty, wyszukiwanie, ceny, dostępność). Każdy moduł potrzebuje tych samych fundamentów — sposobu na reprezentowanie pieniędzy, dat, identyfikatorów oraz mechanizmu komunikacji między modułami przez zdarzenia domenowe. Bez wspólnego fundamentu każdy moduł zbuduje własne rozwiązania prowadząc do chaosu i duplikacji.
+
+**Wymagania:**
+Abstrakcyjna klasa `AggregateRoot` z mechanizonem rejestrowania i pobierania zdarzeń domenowych. Abstrakcyjna klasa `DomainEvent` z identyfikatorem zdarzenia, datą wystąpienia i identyfikatorem agregatu. Bazowy `DomainException`. Value objecty: `Uuid` (wrapper), `Money` (kwota w groszach + waluta), `DateTimeRange` (zakres dat z walidacją kolejności), `Pagination` (strona + liczba wyników). Interfejsy `CommandBus`, `QueryBus`, `Command`, `Query`, `CommandHandler`, `QueryHandler`. Żadna z tych klas nie może mieć importów z frameworka Symfony.
+
+**Definition of Ready:**
+Zdecydowano że Money przechowuje grosze jako int. Zdecydowano jakie waluty obsługuje system (PLN, EUR, USD). Ustalono konwencję nazewnictwa eventów domenowych. Zaakceptowano że Shared Kernel nie ma własnego modułu aplikacyjnego.
+
+**Definition of Done:**
+Wszystkie klasy nie zawierają importów Symfony. Unit testy pokrywają walidacje `DateTimeRange` (from < to). Unit testy pokrywają `Money` (dodawanie, odejmowanie, porównywanie). `Uuid` generuje poprawne UUID v4. PHPStan level 8 przechodzi. Żaden inny moduł nie istnieje jeszcze — te klasy są jedyną zależnością którą będą mogły importować.
+
+---
+
+## TASK-003 — Magistrala komend i zdarzeń jako infrastruktura komunikacji
+
+**Tytuł biznesowy:** Implementacja systemu magistrali umożliwiającego komunikację między modułami systemu
+
+**Opis biznesowy:**
+Moduły systemu muszą komunikować się ze sobą nie znając swoich szczegółów implementacyjnych. Gdy moduł wyszukiwania potrzebuje sprawdzić dostępność miejsc — nie powinien bezpośrednio wywoływać serwisów modułu dostępności. Magistrala komend i zapytań rozwiązuje ten problem zapewniając luźne powiązanie. Zdarzenia domenowe muszą być publikowane synchronicznie (na etapie POC) z możliwością przyszłego przejścia na Kafka.
+
+**Wymagania:**
+Implementacja `MessengerCommandBus` i `MessengerQueryBus` przez Symfony Messenger jako adaptery portów z TASK-002. CommandBus nie zwraca wartości. QueryBus zwraca wynik handlera. Konfiguracja dwóch transportów in-memory dla dev. Automatyczne tagowanie handlerów przez DI. `SynchronousDomainEventPublisher` wywołujący listenery w tej samej transakcji. Konfiguracja `services.yaml` z autowiring i autoconfigure.
+
+**Definition of Ready:**
+TASK-002 ukończony i zmergowany. Zdecydowano że Symfony Messenger jako implementacja magistrali. Zdecydowano że eventy domenowe synchroniczne na POC. Zaakceptowano że przyszła migracja na Kafka wymaga tylko zamiany adaptera.
+
+**Definition of Done:**
+Testy integracyjne potwierdzają że komenda wysłana przez CommandBus trafia do właściwego handlera. Testy potwierdzają że QueryBus zwraca wynik handlera. `SynchronousDomainEventPublisher` wywołuje wszystkich listenerów zarejestrowanych na dany typ eventu. Błąd w handlerze propaguje się jako wyjątek. PHPStan przechodzi.
+
+---
+
+## TASK-004 — Moduł zarządzania lotniskami — model domenowy
+
+**Tytuł biznesowy:** Zbudowanie modelu domenowego lotnisk z walidacją kodów IATA i zarządzaniem statusem
+
+**Opis biznesowy:**
+System musi wiedzieć które lotniska są aktywne i dostępne jako punkty odlotu lub przylotu. Kod IATA lotniska (np. WAW, KTW, KRK) jest kluczowym identyfikatorem używanym przez linie lotnicze i musi być zawsze poprawny — trzy wielkie litery. Lotnisko może być aktywowane i dezaktywowane — dezaktywowane lotnisko nie powinno pojawiać się w wynikach wyszukiwania. Każde lotnisko ma swoje współrzędne geograficzne potrzebne do przyszłych funkcji (np. wyszukiwanie najbliższego lotniska).
+
+**Wymagania:**
+Agregat `Airport` z value objectami: `AirportId`, `IataCode` (dokładnie 3 wielkie litery, walidacja w konstruktorze), `AirportName` (niepusty string max 100 znaków), `Country` (ISO 3166-1 alpha-2), `City`, `GeoCoordinates` (latitude -90/90, longitude -180/180). Metody `activate()` i `deactivate()` rejestrujące eventy. Fabryka statyczna `Airport::create()`. Port `AirportRepository` z metodami findById, findByIataCode, findAllActive. Wyjątki: `AirportNotFoundException`, `InvalidIataCodeException`.
+
+**Definition of Ready:**
+Zdecydowano że IataCode to zawsze dokładnie 3 litery. Potwierdzono że Country używa ISO 3166-1 alpha-2. Zaakceptowano że GeoCoordinates są opcjonalne przy tworzeniu (nullable). Zdecydowano jakie eventy rejestruje agregat.
+
+**Definition of Done:**
+Próba stworzenia `IataCode` z "KT" lub "katowice" wyrzuca `InvalidIataCodeException`. Próba stworzenia `GeoCoordinates` z latitude=91 wyrzuca wyjątek. `activate()` na aktywnym lotnisku nie rejestruje duplikatu eventu. `pullEvents()` czyści listę po pobraniu. Unit testy pokrywają wszystkie przypadki brzegowe. Zero importów Symfony w katalogu `Airport/Domain`.
+
+---
+
+## TASK-005 — Moduł zarządzania lotniskami — API REST
+
+**Tytuł biznesowy:** Udostępnienie API do zarządzania lotniskami i pobierania ich listy
+
+**Opis biznesowy:**
+Administratorzy systemu muszą móc dodawać nowe lotniska, aktywować i dezaktywować istniejące przez REST API. System wyszukiwania lotów potrzebuje pobierać listę aktywnych lotnisk jako punktów odlotu i przylotu dostępnych dla użytkownika. Odpowiedzi API muszą być spójne z resztą systemu i zawierać tylko dane niezbędne dla konsumenta.
+
+**Wymagania:**
+Komendy z handlerami: `CreateAirportCommand`, `ActivateAirportCommand`, `DeactivateAirportCommand`. Zapytania z handlerami: `GetAirportQuery` (po id), `ListActiveAirportsQuery`. Encja Doctrine oddzielona od agregatu domenowego z dedykowanym mapperem. Endpointy: `POST /api/airports`, `GET /api/airports`, `GET /api/airports/{iataCode}`. Walidacja requestów przez Symfony Validator na DTO. Spójny format odpowiedzi przez `ApiResponseFactory`. Globalny `ExceptionListener` mapujący wyjątki domenowe na HTTP.
+
+**Definition of Ready:**
+TASK-003 i TASK-004 ukończone i zmergowane. Zdecydowano format odpowiedzi API (struktura JSON). Potwierdzono że encja Doctrine nie może być agregatem domenowym. Zaakceptowano że mapowanie encja↔agregat jest jawnym kodem a nie magią Doctrine.
+
+**Definition of Done:**
+`POST /api/airports` z niepoprawnym kodem IATA zwraca 422 z czytelnym komunikatem. `GET /api/airports` zwraca tylko aktywne lotniska. `GET /api/airports/NIEISTNIEJACY` zwraca 404. Testy funkcjonalne WebTestCase pokrywają wszystkie endpointy. Doctrine poprawnie persystuje i odtwarza agregat przez mapper. PHPStan przechodzi.
+
+---
+
+## TASK-006 — Moduł lotów — bogaty agregat z polityką przejść statusów
+
+**Tytuł biznesowy:** Zbudowanie modelu domenowego lotu z zarządzaniem statusem i cyklem życia
+
+**Opis biznesowy:**
+Lot to centralny byt systemu. Ma swój cykl życia — od zaplanowania, przez boarding, odlot, aż do lądowania lub anulowania. Nie wszystkie przejścia między statusami są dozwolone — anulowany lot nie może wzbić się w powietrze. Numer lotu musi spełniać format IATA (dwie litery linii lotniczej + 1-4 cyfry np. LO123, FR4567). Czas przylotu musi być późniejszy niż czas odlotu. Lotnisko odlotu i przylotu nie mogą być tym samym lotniskiem.
+
+**Wymagania:**
+Agregat `Flight` z value objectami: `FlightId`, `FlightNumber` (format IATA regex), `Aircraft` (model + totalSeats > 0). `FlightStatus` enum: SCHEDULED, BOARDING, DEPARTED, ARRIVED, CANCELLED, DELAYED. Invarianty w konstruktorze: departure != arrival, arrival > departure. Metody: `delay(newDeparture)`, `cancel(reason)`, `board()`, `depart()`, `arrive()` — każda rejestruje event. `FlightStatusTransitionPolicy` jako osobna klasa domenowa zwracająca dozwolone przejścia i wyrzucająca `InvalidFlightStatusTransitionException`. Port `FlightRepository` z findByRoute (przyjmuje dwa AirportId + DateTimeRange).
+
+**Definition of Ready:**
+TASK-004 ukończony. Ustalono pełną macierz dozwolonych przejść statusów. Potwierdzono format FlightNumber (regex). Zdecydowano że `reason` przy anulowaniu jest wymagany (niepusty string).
+
+**Definition of Done:**
+`cancel()` na locie ze statusem ARRIVED wyrzuca `InvalidFlightStatusTransitionException`. `FlightNumber` z "LOT123" (3 litery) wyrzuca wyjątek. Lot z tym samym lotniskiem odlotu i przylotu nie może być stworzony. Unit testy pokrywają całą macierz przejść statusów (każda niedozwolona kombinacja). Zero importów Symfony w `Flight/Domain`.
+
+---
+
+## TASK-007 — Moduł lotów — API zarządzania lotami
+
+**Tytuł biznesowy:** Udostępnienie API do planowania lotów i zarządzania ich statusem
+
+**Opis biznesowy:**
+Dyspozytorzy linii lotniczych muszą móc planować nowe loty, aktualizować ich status (opóźnienie, anulowanie, boarding) oraz przeszukiwać loty po trasie i dacie. System wyszukiwania będzie korzystał z repozytorium lotów aby znaleźć loty pasujące do kryteriów użytkownika. Błędy biznesowe (niedozwolona zmiana statusu, niepoprawny format numeru) muszą zwracać czytelne komunikaty a nie błędy 500.
+
+**Wymagania:**
+Komendy: `ScheduleFlightCommand`, `DelayFlightCommand`, `CancelFlightCommand`, `BoardFlightCommand`. Zapytania: `GetFlightQuery`, `ListFlightsByRouteQuery` (departure IATA + arrival IATA + date), `ListFlightsByStatusQuery`. Encja Doctrine z mapperem — status jako string w bazie. Endpointy: `POST /api/flights`, `GET /api/flights/{flightNumber}`, `GET /api/flights` (query params: from, to, date, status), `PATCH /api/flights/{flightNumber}/status`. `ExceptionListener` rozszerzony o `InvalidFlightStatusTransitionException` → 409 Conflict.
+
+**Definition of Ready:**
+TASK-005 i TASK-006 ukończone. Zdecydowano format daty w query params (Y-m-d). Potwierdzono że `PATCH /status` przyjmuje nowy status i opcjonalny reason. Zaakceptowano 409 jako kod dla konfliktu statusu.
+
+**Definition of Done:**
+`PATCH` z niedozwoloną zmianą statusu zwraca 409 z opisem dozwolonych przejść. `GET /api/flights` z nieistniejącym kodem IATA zwraca 422. `GET /api/flights` bez parametrów zwraca wszystkie loty z paginacją. Testy funkcjonalne pokrywają pełny cykl życia lotu przez HTTP. Encja Doctrine nie ma żadnej logiki biznesowej.
+
+---
+
+## TASK-008 — Moduł dostępności — agregat miejsc i limiter lotnisk
+
+**Tytuł biznesowy:** Zbudowanie modelu dostępności miejsc z mechanizmem limitowania lotów per lotnisko
+
+**Opis biznesowy:**
+Każdy lot ma określoną liczbę miejsc w każdej klasie kabiny (economy, business, first). System musi śledzić ile miejsc zostało zarezerwowanych i ile jest jeszcze dostępnych. Kluczowa reguła biznesowa: lotnisko może być aktywnym punktem odlotu maksymalnie dla określonej liczby lotów danego dnia. Katowice (KTW) mają limit 2 lotów dziennie — jeśli limit jest osiągnięty, żadne loty z Katowic nie pojawią się w wynikach wyszukiwania na ten dzień. To jest główny mechanizm kontroli przepustowości lotnisk.
+
+**Wymagania:**
+Agregat `FlightAvailability` z polami: FlightId, `CabinClass` enum (ECONOMY, BUSINESS, FIRST), totalSeats, bookedSeats, blockedSeats, minimumAvailableThreshold. Metody: `book(int count)`, `cancelBooking(int count)`, `blockSeats(int count)`, `releaseBlockedSeats(int count)` — wszystkie sprawdzają invariant bookedSeats + blockedSeats <= totalSeats. Metody obliczeniowe: `availableSeats()`, `isAvailable()`, `isNearlyFull()`. `AirportDailyFlightLimiter` — serwis domenowy sprawdzający limit lotów per lotnisko per dzień. Port `AirportDailyFlightLimitRepository` przechowujący konfigurację limitów per lotnisko.
+
+**Definition of Ready:**
+TASK-006 ukończony. Zdecydowano że limit lotniska jest konfiguracją (nie zakodowaną stałą). Potwierdzono że `blockedSeats` to miejsca zarezerwowane dla specjalnych przypadków (np. crew). Zdecydowano że `minimumAvailableThreshold` jest per agregat (może być różny dla economy i business).
+
+**Definition of Done:**
+`book(5)` gdy dostępne są 3 miejsca wyrzuca `InsufficientSeatsException`. `blockSeats` i `book` razem nie mogą przekroczyć `totalSeats`. `AirportDailyFlightLimiter` zwraca false dla KTW gdy już 2 loty są zaplanowane na dany dzień. Unit testy pokrywają wszystkie edge case'y dostępności. Zero importów Symfony w `Availability/Domain`.
+
+---
+
+## TASK-009 — Moduł dostępności — CQRS i API sprawdzania dostępności
+
+**Tytuł biznesowy:** Udostępnienie API do sprawdzania dostępnych lotów z uwzględnieniem limitów lotnisk
+
+**Opis biznesowy:**
+Główny endpoint wyszukiwania musi zwracać tylko loty które faktycznie mają wolne miejsca w żądanej klasie kabiny i spełniają limit dzienny lotniska. To jest kluczowy endpoint systemu — odpowiada bezpośrednio na pytanie "jakie loty są dostępne z A do B w dniu X dla N pasażerów". Jeśli lotnisko osiągnęło dzienny limit (jak KTW z limitem 2 lotów) — żadne loty z tego lotniska nie pojawią się w odpowiedzi tego dnia, niezależnie od faktycznej dostępności miejsc.
+
+**Wymagania:**
+Komendy: `InitializeFlightAvailabilityCommand`, `BlockSeatsCommand`, `ReleaseSeatsCommand`, `BookSeatsCommand`, `CancelBookingCommand`. Zapytanie `CheckRouteAvailabilityQuery` — przyjmuje departure IATA, arrival IATA, date, passengerCount, cabinClass — stosuje filtr `AirportDailyFlightLimiter` i filtr `availableSeats >= passengerCount` — zwraca tylko loty spełniające oba warunki. Endpointy: `GET /api/availability/check` (główny), `POST /api/flights/{flightId}/availability/initialize`, `GET /api/flights/{flightId}/availability`.
+
+**Definition of Ready:**
+TASK-007 i TASK-008 ukończone. Zdecydowano kolejność filtrów (najpierw limiter, potem dostępność). Potwierdzono że `InitializeFlightAvailability` jest wywoływane zaraz po stworzeniu lotu. Zdecydowano format query params dla głównego endpointu.
+
+**Definition of Done:**
+`GET /api/availability/check?from=KTW&to=WAW&date=X` zwraca pustą listę gdy KTW osiągnął limit 2 lotów. Ten sam endpoint zwraca wyniki gdy from=WAW (WAW ma limit 20). Lot z 0 dostępnymi miejscami nie pojawia się w wynikach. Testy funkcjonalne zawierają scenariusz "brak lotów z Katowic z powodu limitu". Seed danych testowych zawiera KTW z limitem 2 i co najmniej 2 zaplanowane loty z KTW w danym dniu.
+
+---
+
+## TASK-010 — Moduł wyszukiwania — agregat sesji wyszukiwania
+
+**Tytuł biznesowy:** Zbudowanie modelu sesji wyszukiwania z walidacją kryteriów i filtrowaniem wyników
+
+**Opis biznesowy:**
+Każde wyszukiwanie użytkownika to sesja która przechodzi przez stany — od oczekiwania, przez przetwarzanie, do zakończenia lub błędu. Sesja przechowuje kryteria wyszukiwania (skąd, dokąd, kiedy, ile osób, klasa kabiny) oraz opcjonalne filtry (maksymalna cena, tylko bezpośrednie). Kryteria muszą być walidowane: data nie może być w przeszłości, liczba pasażerów 1-9, lotnisko odlotu ≠ lotnisko przylotu.
+
+**Wymagania:**
+Agregat `SearchSession` z value objectami: `SearchSessionId`, `SearchCriteria` (departure IATA, arrival IATA, departureDate >= today, returnDate nullable, passengerCount 1-9, CabinClass), `SearchFilters` (maxPrice nullable Money, maxDurationMinutes nullable int, directOnly bool). `SearchStatus` enum: PENDING, PROCESSING, COMPLETED, FAILED. Metody agregatu: `start()`, `complete(int resultCount)`, `fail(string reason)`. `SearchResultItem` jako Value Object (nie encja): FlightId, FlightNumber, departure/arrival, czasy, dostępneMiejsca, cabinClass, basePrice Money. Port `SearchSessionRepository`.
+
+**Definition of Ready:**
+TASK-008 ukończony. Zdecydowano że SearchSession jest agregatem (nie DTO) aby móc rejestrować eventy. Potwierdzono że SearchResultItem to VO — nie jest persystowany w bazie. Zdecydowano że "today" sprawdzane jest w VO `SearchCriteria` przez `new DateTimeImmutable('today')`.
+
+**Definition of Done:**
+`SearchCriteria` z datą wczorajszą wyrzuca `InvalidSearchCriteriaException`. `SearchCriteria` z KTW jako departure i arrival wyrzuca wyjątek. `passengerCount` 0 lub 10 wyrzuca wyjątek. `complete()` na sesji w statusie FAILED wyrzuca wyjątek. Unit testy pokrywają wszystkie walidacje. Zero importów Symfony w `Search/Domain`.
+
+---
+
+## TASK-011 — Moduł wyszukiwania — orkiestracja i cache wyników
+
+**Tytuł biznesowy:** Implementacja silnika wyszukiwania lotów łączącego dostępność, ceny i filtry
+
+**Opis biznesowy:**
+Serce systemu — serwis który przyjmuje kryteria wyszukiwania, pyta moduł dostępności o pasujące loty, wzbogaca wyniki o ceny z modułu pricing, aplikuje dodatkowe filtry użytkownika (max cena, czas trwania) i zwraca posortowaną listę. Wyniki są cache'owane na 5 minut aby wielokrotne odświeżanie wyników przez użytkownika nie generowało zbędnego obciążenia. Wyszukiwanie jest asynchroniczne — użytkownik dostaje sessionId i odpytuje o wyniki.
+
+**Wymagania:**
+`InitiateSearchCommand` / handler — tworzy SearchSession PENDING, dispatchuje `ExecuteSearchCommand`. `ExecuteSearchCommand` / handler — główna logika: wywołuje `CheckRouteAvailabilityQuery`, wzbogaca o ceny przez `GetCurrentPriceQuery`, aplikuje `SearchFilters`, sortuje (domyślnie cena rosnąco), zapisuje do `SearchResultsCache`, ustawia sesję COMPLETED. Port `SearchResultsCache` z adapterem `InMemorySearchResultsCache`. `GetSearchResultsQuery` zwracający wyniki z cache z paginacją. Port `SearchPort` jako jedyne wejście do modułu z zewnątrz.
+
+**Definition of Ready:**
+TASK-009 i TASK-010 ukończone. TASK-013 (Pricing) musi być ukończony równolegle lub wcześniej. Zdecydowano że sortowanie domyślne to cena rosnąco. Potwierdzono że InMemory cache wystarczy na POC.
+
+**Definition of Done:**
+Test integracyjny potwierdza pełny flow: InitiateSearch → ExecuteSearch → GetSearchResults. Wyniki zawierają wyliczoną cenę dla każdego lotu. Loty z KTW nie pojawiają się w wynikach gdy limiter jest aktywny. Filtr `maxPrice` poprawnie wyklucza droższe loty. Filtr `directOnly` działa (na POC wszystkie loty są bezpośrednie — filtr zawsze true ale musi być zaimplementowany). Paginacja działa poprawnie.
+
+---
+
+## TASK-012 — Moduł wyszukiwania — API wyszukiwania lotów
+
+**Tytuł biznesowy:** Udostępnienie głównego API wyszukiwania lotów z dokumentacją OpenAPI
+
+**Opis biznesowy:**
+Użytkownik systemu (aplikacja frontendowa lub inny serwis) inicjuje wyszukiwanie przez POST, dostaje sessionId i następnie polling'uje GET aby sprawdzić czy wyniki są gotowe. To podejście asynchroniczne pozwala na przyszłą optymalizację (Kafka, WebSocket) bez zmiany kontraktu API. Dokumentacja OpenAPI / Swagger musi być dostępna pod `/api/doc` — jest kluczowa dla zespołów konsumujących API.
+
+**Wymagania:**
+`POST /api/search` — przyjmuje `SearchRequestDTO` z pełną walidacją: format IATA (Length=3, uppercase), date format Y-m-d nie w przeszłości, passengers 1-9, cabinClass z enuma, filters opcjonalne. Zwraca 202 z sessionId i linkiem do wyników. `GET /api/search/{sessionId}/results` — zwraca status + wyniki gdy COMPLETED, 202 gdy PROCESSING, 422 gdy FAILED z powodem. Dokumentacja OpenAPI przez atrybuty `#[OA\...]` na kontrolerach i DTO. `nelmio/api-doc-bundle` ze Swagger UI pod `/api/doc`. Rate limiting 100 req/min per IP przez `symfony/rate-limiter`.
+
+**Definition of Ready:**
+TASK-011 ukończony. Zdecydowano że polling a nie WebSocket na POC. Potwierdzono że 202 zwracany gdy wyniki jeszcze nie gotowe. Zaakceptowano że Swagger UI dostępny bez autentykacji (POC).
+
+**Definition of Done:**
+`POST /api/search` z datą w przeszłości zwraca 422 z opisem błędu. `GET /api/search/{nieistniejacyId}` zwraca 404. Swagger UI ładuje się pod `/api/doc` i pokazuje wszystkie endpointy. Dokumentacja OpenAPI zawiera przykładowe request/response dla search. Rate limiter zwraca 429 po przekroczeniu limitu. Testy funkcjonalne pokrywają pełny flow polling'u.
+
+---
+
+## TASK-013 — Moduł cennika — agregat i polityki cenowe
+
+**Tytuł biznesowy:** Zbudowanie modelu cennika z dynamicznymi politykami cenowymi
+
+**Opis biznesowy:**
+Cena biletu nie jest stała — zmienia się w zależności od tego kiedy kupujemy (early bird taniej, last minute drożej), jak bardzo lot jest zapełniony (mało miejsc = wyższa cena) oraz od liczby pasażerów (zniżka grupowa). Każdy lot i klasa kabiny mają osobny cennik z ceną bazową i listą reguł cenowych. Kalkulator ceny stosuje reguły po kolei i zwraca finalną cenę wraz z listą zastosowanych modyfikacji (transparentność dla użytkownika).
+
+**Wymagania:**
+Agregat `PriceList` z polami: FlightId, CabinClass, basePrice Money, kolekcja `PricingRule` VO, validFrom, validTo, isActive. Polityki domenowe implementujące port `PricingPolicy`: `EarlyBirdPricingPolicy` (> 30 dni przed wylotem → -15%), `LastMinutePricingPolicy` (< 7 dni → +30%), `OccupancyBasedPricingPolicy` (< 20% miejsc → +20%), `PassengerCountPricingPolicy` (>= 5 pasażerów → -10%). `PriceCalculator` — serwis domenowy stosujący aktywne polityki kolejno na basePrice. Zwraca `PriceCalculationResult` (finalPrice Money + lista `appliedRules` stringów z opisem co i dlaczego zostało zastosowane).
+
+**Definition of Ready:**
+TASK-002 ukończony (Money VO potrzebne). Zdecydowano kolejność stosowania polityk (addytywne na %). Potwierdzono że polityki nie mogą zejść poniżej 0. Zdecydowano że `appliedRules` to ludzkie opisy dla logowania/debugowania.
+
+**Definition of Done:**
+Lot kupowany 31 dni przed wylotem ma cenę bazową * 0.85. Lot kupowany 6 dni przed wylotem ma cenę bazową * 1.30. Kombinacja early bird + 5 pasażerów daje poprawny wynik (oba rabaty). `PriceCalculationResult` zawiera opis każdej zastosowanej polityki. Unit testy pokrywają każdą politykę osobno i kombinacje. Zero importów Symfony w `Pricing/Domain`.
+
+---
+
+## TASK-014 — Moduł cennika — CQRS i API cennika
+
+**Tytuł biznesowy:** Udostępnienie API zarządzania cennikami i kalkulacji cen biletów
+
+**Opis biznesowy:**
+Administratorzy cennika muszą móc tworzyć i aktualizować cenniki dla lotów. Moduł wyszukiwania potrzebuje pobierać aktualną cenę dla znalezionych lotów aby wzbogacić wyniki. Endpoint kalkulatora ceny pozwala sprawdzić ile zapłacą pasażerowie przed zakupem — z pełnym wyjaśnieniem zastosowanych reguł cenowych. Jest to kluczowe dla transparentności cen.
+
+**Wymagania:**
+Komendy: `CreatePriceListCommand`, `UpdateBasePriceCommand`, `AddPricingRuleCommand`, `DeactivatePriceListCommand`. Zapytania: `GetCurrentPriceQuery` (FlightId + CabinClass + passengerCount + purchaseDate → PriceCalculationResult), `GetPriceListQuery`. Encja Doctrine z PricingRules serializowanymi jako JSON w kolumnie. Integracja z Search: `ExecuteSearchCommandHandler` wywołuje `GetCurrentPriceQuery` dla każdego lotu w wynikach. Endpointy: `POST /api/price-lists`, `GET /api/price-lists/{flightId}`, `GET /api/price-calculator?flightId=&cabin=&passengers=&purchaseDate=`.
+
+**Definition of Ready:**
+TASK-011 i TASK-013 ukończone. Zdecydowano że cennik jest per lot + klasa kabiny (nie per linia lotnicza). Potwierdzono że `GetCurrentPriceQuery` zwraca błąd gdy brak aktywnego cennika dla lotu. Zdecydowano format daty purchaseDate.
+
+**Definition of Done:**
+`GET /api/price-calculator` zwraca finalPrice i listę zastosowanych reguł z opisami. Wyniki `/api/search/{id}/results` zawierają wyliczoną cenę dla każdego lotu. Brak cennika dla lotu zwraca czytelny błąd 422. Testy integracyjne weryfikują że cena w wynikach wyszukiwania jest identyczna z kalkulatorem dla tych samych parametrów. PHPStan przechodzi.
+
+---
+
+## TASK-015 — Globalna obsługa błędów i middleware HTTP
+
+**Tytuł biznesowy:** Implementacja spójnej obsługi błędów i middleware dla całego API
+
+**Opis biznesowy:**
+Wszystkie odpowiedzi błędów w systemie muszą mieć jednolity format — konsument API nie może dostawać różnych struktur w zależności od modułu który rzucił wyjątek. Każdy request musi być śledzony przez Correlation ID — unikalny identyfikator przepływający przez wszystkie logi umożliwiający debugowanie konkretnego żądania. Format odpowiedzi sukcesu również musi być spójny z metadanymi (timestamp, correlationId).
+
+**Wymagania:**
+`ApiExceptionListener` mapujący wyjątki na JSON: `DomainException` → 422, `NotFoundException` → 404, `\InvalidArgumentException` → 400, reszta → 500. Format błędu: `{"error": {"code": "AIRPORT_NOT_FOUND", "message": "...", "details": {}}}`. `CorrelationIdMiddleware` — generuje UUID lub przepuszcza `X-Correlation-Id` z requestu, dostępny przez `CorrelationIdStorage` w DI. `ApiResponseFactory` tworzący: `{"data": ..., "meta": {"correlationId": ..., "timestamp": ...}}`. `RequestValidationMiddleware` sprawdzający Content-Type dla POST/PUT/PATCH.
+
+**Definition of Ready:**
+TASK-005 ukończony (pierwsza implementacja ExceptionListener do zastąpienia). Zdecydowano że "code" w błędzie to SCREAMING_SNAKE_CASE nazwa wyjątku. Potwierdzono że 500 nie ujawnia stack trace w produkcji (zmienna APP_ENV). Zaakceptowano format meta w odpowiedziach.
+
+**Definition of Done:**
+Każdy wyjątek domenowy ma zmapowany HTTP status i unikalny "code". Odpowiedź 500 nie zawiera stack trace gdy APP_ENV=prod. `X-Correlation-Id` jest w każdej odpowiedzi (zarówno sukces jak i błąd). `ApiResponseFactory` użyty we wszystkich kontrolerach zamiast bezpośrednich Response. Testy jednostkowe `ApiExceptionListener` pokrywają każdy typ wyjątku.
+
+---
+
+## TASK-016 — Migracje bazy danych i dane testowe
+
+**Tytuł biznesowy:** Przygotowanie struktury bazy danych i realistycznych danych testowych
+
+**Opis biznesowy:**
+System potrzebuje danych testowych które pozwolą na demonstrację wszystkich funkcjonalności — w szczególności scenariusza braku lotów z Katowic z powodu limitu przepustowości lotniska. Dane muszą być realistyczne i pokrywać różne przypadki: loty dostępne, loty pełne, loty z Katowic osiągające limit, różne klasy cenowe. Migracje muszą być deterministyczne i działać zarówno na SQLite (dev) jak i PostgreSQL (prod).
+
+**Wymagania:**
+Migracje Doctrine dla wszystkich tabel z `created_at` i `updated_at` przez `TimestampableTrait`. Command `app:fixtures:load`. Lotniska: WAW, KTW, KRK, GDN, WRO, CDG, LHR, FRA. Limity dzienne: KTW=2 (celowo niski), WAW=20, pozostałe=10. Minimum 3 loty z KTW zaplanowane na "jutro" (limiter musi je blokować). Minimum 10 lotów z WAW na różne destynacje. Loty w różnych statusach. Dostępność: kilka lotów prawie pełnych (<20% miejsc — OccupancyBasedPricingPolicy powinna się aktywować). Cenniki dla wszystkich lotów z różnymi cenami bazowymi.
+
+**Definition of Ready:**
+Wszystkie poprzednie taski (001-015) ukończone. Zdecydowano które daty używać w fixtures (relative: 'tomorrow', '+7 days'). Potwierdzono że fixtures są idempotentne (można uruchomić wielokrotnie). Zdecydowano że fixtures ładują się przez `make fixtures`.
+
+**Definition of Done:**
+`make fixtures` działa bez błędów. `GET /api/availability/check?from=KTW&to=WAW&date=[jutro]` zwraca pustą listę. `GET /api/availability/check?from=WAW&to=CDG&date=[jutro]` zwraca wyniki. `GET /api/price-calculator` dla lotu z <20% dostępnością zwraca dopłatę OccupancyBased. Baza po fixtures zawiera dokładnie tyle rekordów ile zdefiniowano w fixtures. `make migrate && make fixtures` działa od zera.
+
+---
+
+## TASK-017 — Cache warstwy zapytań i optymalizacja wydajności
+
+**Tytuł biznesowy:** Wdrożenie cache'owania wyników zapytań w celu poprawy wydajności wyszukiwania
+
+**Opis biznesowy:**
+Wyszukiwanie lotów to operacja kosztowna — odpytuje bazę, przelicza ceny przez polityki, filtruje przez limiter. Użytkownik często odświeża wyniki lub wielu użytkowników szuka na tej samej trasie. Cache zmniejsza obciążenie bazy i skraca czas odpowiedzi. Dane o lotniskach zmieniają się rzadko — mogą być cache'owane godzinę. Wyniki wyszukiwania są ważne 5 minut. Wyliczone ceny ważne 2 minuty (polityki zależą od czasu do odlotu który zmienia się co minutę).
+
+**Wymagania:**
+Symfony Cache z adapterem filesystem dla dev, zmienną `CACHE_DSN` dla prod (Redis-ready). `CachedAirportRepository` jako dekorator owijający Doctrine repozytorium — cache TTL 60 min dla `findAllActive()`, inwalidacja po eventach `AirportActivated`/`AirportDeactivated`. `CachedSearchResultsCache` implementacja portu `SearchResultsCache` — TTL 5 min. `CachedPriceCalculation` dekorator na `PriceCalculator` — klucz cache: flightId+cabinClass+passengerCount+date, TTL 2 min. Indeksy DB: flights po (departure_airport_id, arrival_airport_id, scheduled_departure), flight_availability po (flight_id, cabin_class), airports.iata_code unique.
+
+**Definition of Ready:**
+TASK-011 i TASK-014 ukończone. Zdecydowano wzorzec Decorator dla cache (nie modyfikujemy istniejących klas). Potwierdzono że Decorator jest wstrzykiwany przez DI zamiast oryginalnej klasy. Zaakceptowano że InMemory znika — zastępuje go CachedSearchResultsCache.
+
+**Definition of Done:**
+Drugie wywołanie `findAllActive()` nie generuje zapytania SQL (weryfikacja przez Symfony Profiler). Dezaktywacja lotniska inwaliduje cache — kolejne wywołanie pobiera z bazy. Czas odpowiedzi `GET /api/search/{id}/results` przy powtórnym zapytaniu < 50ms. Indeksy dodane w migracji i potwierdzone przez `EXPLAIN` na zapytaniach wyszukiwania.
+
+---
+
+## TASK-018 — Testy integracyjne i scenariusze end-to-end
+
+**Tytuł biznesowy:** Implementacja kompleksowych testów scenariuszowych systemu wyszukiwania lotów
+
+**Opis biznesowy:**
+System musi być pokryty testami które weryfikują nie tylko pojedyncze klasy ale całe scenariusze biznesowe — od złożenia zapytania przez HTTP do zwrócenia wyników z cenami. Szczególnie ważny jest scenariusz "brak lotów z Katowic" — musi być udokumentowany testem który jasno pokazuje dlaczego wyniki są puste i który element systemu (AirportDailyFlightLimiter) za to odpowiada.
+
+**Wymagania:**
+Trait `DatabaseTestCase` resetujący bazę przez migracje + minimalne fixtures przed każdym testem. Testy integracyjne: `BookSeatsCommandHandlerTest` (invarianty dostępności), `PriceCalculatorIntegrationTest` (kombinacje polityk). Testy funkcjonalne HTTP: pełny flow wyszukiwania POST→polling→GET, scenariusz "brak lotów z Katowic" z asercją na pustą listę i komentarzem wyjaśniającym dlaczego, scenariusz last-minute dopłata, scenariusz niedozwolona zmiana statusu → 409. Raport pokrycia przez `--coverage-html`. Cel: >80% kodu domenowego.
+
+**Definition of Ready:**
+TASK-016 ukończony (fixtures potrzebne do testów). Zdecydowano że testy e2e używają WebTestCase (nie Behat). Potwierdzono że osobna baza SQLite dla testów przez `.env.test`. Zaakceptowano że >80% pokrycia dotyczy katalogów `*/Domain/*` i `*/Application/*`.
+
+**Definition of Done:**
+`make test` uruchamia całą suitę i przechodzi. Test "brak lotów z Katowic" ma komentarz: `// KTW has daily limit of 2 flights, fixtures load 3 flights from KTW - limiter blocks all results`. Raport pokrycia generuje się w `coverage/`. Pokrycie kodu domenowego > 80%. Żaden test nie zależy od kolejności uruchomienia. CI przechodzi na GitHub Actions.
+
+---
+
+## TASK-019 — CI/CD pipeline i szablony Pull Requestów
+
+**Tytuł biznesowy:** Wdrożenie pipeline'u CI i procesu code review wymuszającego jakość opisów PR
+
+**Opis biznesowy:**
+Każda zmiana kodu musi przejść automatyczną weryfikację przed mergem — analiza statyczna, standardy kodu i testy muszą być zielone. Kluczowe dla POC generatora dokumentacji: Pull Requesty muszą mieć wypełniony opis według szablonu zawierającego sekcje o decyzjach architektonicznych i wpływie na inne moduły. PR bez dobrego opisu = zły wsad do generatora dokumentacji = słaba dokumentacja. Pipeline wymusza wypełnienie szablonu jako blokadę merge'a.
+
+**Wymagania:**
+Workflow `ci.yml`: checkout → PHP 8.4 z extensions (pdo_sqlite, intl) → `composer install` → `make stan` → `make cs` → `make test` → upload coverage artifact. Workflow `pr-check.yml`: weryfikuje że opis PR ma minimum 200 znaków i zawiera wymagane sekcje. Szablon `.github/pull_request_template.md` z sekcjami: "Co zostało zrobione" (opis biznesowy zmiany), "Decyzje architektoniczne" (dlaczego tak a nie inaczej), "Odrzucone alternatywy" (co rozważano), "Wpływ na inne moduły", "Jak testować", "Znane ograniczenia". Label'e: `module:flight`, `module:search`, `module:pricing`, `module:availability`, `module:airport`, `module:shared`.
+
+**Definition of Ready:**
+TASK-018 ukończony. GitHub Actions dostępne w repozytorium. Zdecydowano że minimum 200 znaków opisu jako blokada. Potwierdzono że szablon PR jest po angielsku (kod po angielsku, README po angielsku). Zaakceptowano że label musi być przypisany przez autora PR.
+
+**Definition of Done:**
+PR bez wypełnionych sekcji szablonu dostaje failed check `pr-check`. Badge CI widoczny w README (zielony). Każdy z 18 poprzednich tasków ma PR z wypełnionym szablonem — są to materiały do demonstracji POC generatora dokumentacji. `make stan && make cs && make test` przechodzi lokalnie i na CI identycznie.
+
+---
+
+## TASK-020 — Dokumentacja README, decyzje architektoniczne i kolekcja API
+
+**Tytuł biznesowy:** Przygotowanie dokumentacji projektu i kolekcji żądań API do demonstracji systemu
+
+**Opis biznesowy:**
+Repozytorium jest publiczne i służy jako materiał demonstracyjny dla POC generatora dokumentacji. Musi zawierać wyczerpującą dokumentację architektury — szczególnie wyjaśnienie dlaczego pewne decyzje zostały podjęte i jakie były alternatywy. Plik `known-limitations.md` celowo opisuje znane ograniczenia systemu — w tym mechanizm limitera KTW który jest głównym przykładem do demonstracji w POC. Kolekcja Bruno pozwala od razu przetestować wszystkie endpointy.
+
+**Wymagania:**
+README z: opisem domeny, diagramem modułów w Mermaid, opisem każdego modułu i jego odpowiedzialności, instrukcją uruchomienia (Docker + lokalnie), opisem zmiennych środowiskowych. Plik `docs/architecture-decisions.md`: dlaczego hexagonalna architektura, dlaczego CQRS tylko na agregatach, dlaczego `AirportDailyFlightLimiter` jest serwisem domenowym a nie polityką, dlaczego SearchSession jest agregatem, dlaczego polling a nie WebSocket. Plik `docs/known-limitations.md`: brak autentykacji, synchroniczny event publisher, InMemory → Cache upgrade, szczegółowy opis mechanizmu limitera KTW z przykładem (celowo niski limit 2 jako demonstracja). Kolekcja Bruno z przykładami dla wszystkich endpointów z danymi z fixtures.
+
+**Definition of Ready:**
+TASK-019 ukończony. Wszystkie 19 poprzednich tasków zmergowane. Zdecydowano że dokumentacja po angielsku. Potwierdzono że kolekcja Bruno (nie Postman) — open source, bez chmury. Zaakceptowano że `known-limitations.md` jest celowo szczegółowy bo jest materiałem do POC.
+
+**Definition of Done:**
+Diagram Mermaid renderuje się poprawnie na GitHub. `docs/known-limitations.md` zawiera sekcję "Airport Daily Flight Limiter" z wyjaśnieniem: konfiguracja limitów, gdzie w kodzie jest sprawdzana, dlaczego KTW ma limit 2, jak zmienić limit. Kolekcja Bruno importuje się i wszystkie żądania działają na świeżych fixtures. README zawiera przykład curl dla scenariusza "brak lotów z Katowic". Repozytorium gotowe jako materiał źródłowy do demonstracji POC.
