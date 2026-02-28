@@ -10,3 +10,7 @@
 controllers:
     resource: '../src/Shared/Infrastructure/Http/Controller/'
     type: attribute
+
+availability_controllers:
+    resource: '../src/Availability/Presentation/Controller/'
+    type: attribute

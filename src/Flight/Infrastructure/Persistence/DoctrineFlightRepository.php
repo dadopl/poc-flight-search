@@ -60,6 +60,23 @@ final class DoctrineFlightRepository implements FlightRepository
         return array_map(fn (array $row) => $this->fromRow($row), $rows);
     }
 
+    public function countByDepartureAirportAndDate(AirportId $airportId, DateTimeImmutable $date): int
+    {
+        $result = $this->connection->fetchOne(
+            'SELECT COUNT(*) FROM flights
+             WHERE departure_airport_id = :airportId
+               AND departure_time >= :from
+               AND departure_time <= :to',
+            [
+                'airportId' => $airportId->getValue(),
+                'from'      => $date->format('Y-m-d') . ' 00:00:00',
+                'to'        => $date->format('Y-m-d') . ' 23:59:59',
+            ],
+        );
+
+        return (int) $result;
+    }
+
     /** @return Flight[] */
     public function findByStatus(?FlightStatus $status, int $page, int $limit): array
     {
