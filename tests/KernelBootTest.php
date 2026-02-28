@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace App\Tests;
 
+use App\Kernel;
 use PHPUnit\Framework\TestCase;
 
 class KernelBootTest extends TestCase
 {
-    public function testTrueIsTrue(): void
+    public function testKernelBoots(): void
     {
-        $this->assertTrue(true);
+        $kernel = new Kernel('test', false);
+        $kernel->boot();
+
+        $this->assertSame('test', $kernel->getEnvironment());
+        $this->assertFalse($kernel->isDebug());
+
+        $kernel->shutdown();
     }
 }
